@@ -1,6 +1,9 @@
+#![forbid(unsafe_code)]
 use reqwest::header;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use std::collections::HashMap;
+use rusty_ulid::generate_ulid_string;
 
 pub struct RevoltRs {
     client: reqwest::Client,
@@ -17,9 +20,20 @@ pub enum Metadata {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(tag = "type")]
+pub enum AttachmentTag {
+    Attachments,
+    Avatars,
+    Backgrounds,
+    Banners,
+    Icons
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Attachment {
-    pub _id: String,
-    pub tag: String,
+    #[serde(rename = "_id")]
+    pub id: String,
+    pub tag: AttachmentTag,
     pub size: i32,
     pub filename: String,
     pub metadata: Metadata,
@@ -27,26 +41,48 @@ pub struct Attachment {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(tag = "type")]
+pub enum RelationshipStatus {
+    Blocked,
+    BlockedOther,
+    Friend,
+    Incoming,
+    None,
+    Outgoing,
+    User
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Relationship {
-    pub status: String,
-    pub _id: Option<String>,
+    pub status: RelationshipStatus,
+    #[serde(rename = "_id")]
+    pub id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum StatusPresence {
+    Busy,
+    Idle,
+    Invisible,
+    Online
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Status {
     pub text: Option<String>,
-    pub presence: Option<String>,
+    pub presence: Option<StatusPresence>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct User {
-    pub _id: String,
+    #[serde(rename = "_id")]
+    pub id: String,
     pub username: String,
     pub avatar: Option<Attachment>,
     pub relations: Option<Vec<Relationship>>,
     pub badges: Option<i32>,
     pub status: Option<Status>,
-    pub relationship: Option<String>,
+    pub relationship: Option<RelationshipStatus>,
     pub online: Option<bool>,
     pub flags: Option<i32>,
     pub bot: Option<String>,
@@ -65,25 +101,50 @@ pub struct Profile {
     pub background: Option<ProfileTypes>
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub enum EditUserRemove {
+    Avatar,
+    ProfileBackground,
+    ProfileContent,
+    StatusText
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct EditUser {
     pub status: Option<Status>,
     pub profile: Option<Profile>,
     pub avatar: Option<String>,
-    pub remove: Option<String>
+    pub remove: Option<EditUserRemove>
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct EditAutumn {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub icon: Option<String>,
+    pub remove: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LastMessage {
-    pub _id: String,
+    #[serde(rename = "_id")]
+    pub id: String,
     pub author: String,
     pub short: String
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(untagged)]
+pub enum LastMessageType {
+    A(LastMessage),
+    B(String)
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct DirectMessageChannel {
-    pub _id: String,
-    pub channel_type: String,
+    #[serde(rename = "_id")]
+    pub id: String,
+    pub channel_type: ChannelTypes,
     pub active: Option<bool>,
     pub recipients: Vec<String>,
     pub name: Option<String>,
@@ -92,6 +153,51 @@ pub struct DirectMessageChannel {
     pub last_message: LastMessage,
     pub icon: Option<Attachment>,
     pub permissions: Option<i32>
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct RolePermissions {
+    pub role_permissions: String
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(tag = "type")]
+pub enum ChannelTypes {
+    SavedMessages,
+    DirectMessage,
+    Group,
+    TextChannel,
+    VoiceChannel
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Channel {
+    #[serde(rename = "_id")]
+    pub id: String,
+    pub server: Option<String>,
+    pub channel_type: ChannelTypes,
+    pub active: Option<bool>,
+    pub recipients: Option<Vec<String>>,
+    pub name: Option<String>,
+    pub owner: Option<String>,
+    pub description: Option<String>,
+    pub last_message: Option<LastMessageType>,
+    pub user: Option<String>,
+    pub icon: Option<Attachment>,
+    pub default_permissions: Option<i32>,
+    pub role_permissions: Option<HashMap<String, i32>>,
+    pub permissions: Option<i32>,
+    pub nonce: Option<String>
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Permissions {
+    pub permissions: i32
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Invite {
+    pub code: String
 }
 
 #[derive(Error, Debug)]
@@ -105,7 +211,7 @@ pub enum RevoltRsError {
     Serde {
         #[from]
         source: serde_json::Error
-    }
+    },
 }
 
 // Base API URL: https://api.revolt.chat
@@ -126,11 +232,12 @@ impl RevoltRs {
         let user: User = serde_json::from_str(&data)?;
         Ok(user)
     }
-    pub async fn edit_user(self, argument: EditUser) -> Result<(), RevoltRsError> {
-        self.client.patch("https://api.revolt.chat/users/@me")
-            .body(serde_json::to_string(&argument)?)
-            .send().await?;
-        Ok(())
+    pub async fn edit_user(self, parameters: EditUser) -> Result<String, RevoltRsError> {
+        let data = self.client.patch("https://api.revolt.chat/users/@me")
+            .body(serde_json::to_string(&parameters)?)
+            .send().await?
+            .text().await?;
+        Ok(data)
     }
     pub async fn fetch_user_profile(self, user_id: &str) -> Result<Profile, RevoltRsError> {
         let url = format!("https://api.revolt.chat/users/{0}/profile", user_id);
@@ -217,5 +324,52 @@ impl RevoltRs {
             .text().await?;
         let relationship: Relationship = serde_json::from_str(&data)?;
         Ok(relationship)
+    }
+    pub async fn fetch_channel(self, channel_id: &str) -> Result<Channel, RevoltRsError> {
+        let url = format!("https://api.revolt.chat/channels/{0}", channel_id);
+        let data = self.client.get(url)
+            .send().await?
+            .text().await?;
+        let channel: Channel = serde_json::from_str(&data)?;
+        Ok(channel)
+    }
+    pub async fn edit_channel(self, channel_id: &str, parameters: EditAutumn) -> Result<String, RevoltRsError> {
+        let url = format!("https://api.revolt.chat/channels/{0}", channel_id);
+        let data = self.client.patch(url)
+            .body(serde_json::to_string(&parameters)?)
+            .send().await?
+            .text().await?;
+        Ok(data)
+    }
+    pub async fn close_channel(self, channel_id: &str) -> Result<String, RevoltRsError> {
+        let url = format!("https://api.revolt.chat/channels/{0}", channel_id);
+        let data = self.client.delete(url)
+            .send().await?
+            .text().await?;
+        Ok(data)
+    }
+    pub async fn create_invite(self, channel_id: &str) -> Result<Invite, RevoltRsError> {
+        let url = format!("https://api.revolt.chat/channels/{0}/invites", channel_id);
+        let data = self.client.post(url)
+            .send().await?
+            .text().await?;
+        let invite: Invite = serde_json::from_str(&data)?;
+        Ok(invite)
+    }
+    pub async fn set_role_permission(self, channel_id: &str, role_id: &str, permissions: Permissions) -> Result<String, RevoltRsError> {
+        let url = format!("https://api.revolt.chat/channels/{0}/permissions/{1}", channel_id, role_id);
+        let data = self.client.post(url)
+            .body(serde_json::to_string(&permissions)?)
+            .send().await?
+            .text().await?;
+        Ok(data)
+    }
+    pub async fn set_default_permission(self, channel_id: &str, permissions: Permissions) -> Result<String, RevoltRsError> {
+        let url = format!("https://api.revolt.chat/channels/{0}/permissions/default", channel_id);
+        let data = self.client.post(url)
+            .body(serde_json::to_string(&permissions)?)
+            .send().await?
+            .text().await?;
+        Ok(data)
     }
 }

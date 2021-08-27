@@ -327,8 +327,8 @@ impl RevoltRs {
     ) -> Result<String, RevoltRsError> {
         let url = format!("{0}/channels/{1}/messages/{2}", API_URL, channel_id, message_id);
         let parameters = internal::EditMessage {
-            content: content,
-        }
+            content: content.to_string(),
+        };
         let data = self
             .client
             .patch(url)
